@@ -1,5 +1,7 @@
 #include <Wire.h>
 #include <Adafruit_MCP23X17.h>
+#include <Adafruit_GFX.h>
+#include <Adafruit_SSD1306.h>
 
 // Teensy: usbMIDI object is provided automatically when USB Type includes MIDI.
 // No #include <USB-MIDI.h> required or allowed.
@@ -34,6 +36,18 @@ static const uint8_t MCP_ADDR[N_MCP] = {0x20, 0x21, 0x22};
 // One Adafruit MCP object per expander
 Adafruit_MCP23X17 mcp[N_MCP];
 
+// Create a display object
+#define SCREEN_WIDTH 128
+#define SCREEN_HEIGHT 64
+Adafruit_SSD1306 display(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, -1); // -1 = no reset pin
+
+// OLED state
+uint8_t  activeKeys = 0;
+int8_t   lastKey    = -1;
+bool     lastOn     = false;
+bool     oledDirty  = true;
+uint32_t lastOLEDUpdate = 0;
+
 // Per-key state tracking
 uint8_t  stableState[N_KEYS];     // Last accepted stable state: 1=released, 0=pressed
 uint8_t  debounceCount[N_KEYS];   // Counts consecutive differing samples
@@ -47,6 +61,46 @@ uint32_t lockoutUntil[N_KEYS];
 
 // Convert key index → MIDI note number
 inline uint8_t noteOf(uint8_t i) { return BASE_NOTE + i; }
+
+// ============================================================
+// -------------------- Power-up Sequences --------------------
+// ============================================================
+
+void powerUpSelfTest() {
+  Serial.println();
+  Serial.println("=== Power-up self-test ===");
+
+  // Confirm each MCP is present (begin_I2C already did the real check),
+  // but this gives you a clean "all good" line every boot.
+  for (uint8_t c = 0; c < N_MCP; ++c) {
+    Serial.print("MCP 0x");
+    Serial.print(MCP_ADDR[c], HEX);
+    Serial.println(" OK");
+  }
+
+  // Take one snapshot of GPIO so you can spot "everything reads high" quickly
+  readAllGPIO();
+  for (uint8_t c = 0; c < N_MCP; ++c) {
+    Serial.print("GPIO 0x");
+    Serial.print(MCP_ADDR[c], HEX);
+    Serial.print(" = 0x");
+    Serial.println(gpioCache[c], HEX);
+  }
+
+  Serial.println("=========================");
+  Serial.println();
+}
+
+void midiPanicOnBoot() {
+  // “All Notes Off” + related safety resets across all channels
+  for (uint8_t ch = 1; ch <= 16; ch++) {
+    usbMIDI.sendControlChange(64, 0, ch);   // sustain off
+    usbMIDI.sendControlChange(121, 0, ch);  // reset controllers
+    usbMIDI.sendControlChange(123, 0, ch);  // all notes off
+  }
+  usbMIDI.send_now();
+  Serial.println("MIDI panic sent (All Notes Off, etc).");
+}
 
 // ============================================================
 // -------------------- MCP Input Handling --------------------
@@ -89,10 +143,15 @@ void sendNoteOff(uint8_t note, uint8_t key) {
 }
 
 void debugBadBits() {
+  static uint32_t lastPrint = 0;
+  uint32_t now = millis();
+  if (now - lastPrint < 200) return;   // print 5x/sec
+  lastPrint = now;
+
   uint16_t g = gpioCache[1];   // MCP at 0x21
 
   auto bit01 = [&](uint8_t b) -> uint8_t {
-    return (g >> b) & 0x01;    // <-- this yields 0 or 1
+    return (g >> b) & 0x01;
   };
 
   Serial.print("0x21 GPIOAB=0x");
@@ -105,6 +164,33 @@ void debugBadBits() {
   Serial.println(bit01(8));
 }
 
+void updateOLED() {
+  uint32_t now = millis();
+
+  // Limit redraw rate (OLED does not need fast updates)
+  if (!oledDirty && (now - lastOLEDUpdate < 200)) return;
+  lastOLEDUpdate = now;
+  oledDirty = false;
+
+  display.clearDisplay();
+  display.setCursor(0, 0);
+
+  display.println("Organ Encoder");
+
+  display.print("Active: ");
+  display.println(activeKeys);
+
+  display.print("Last: ");
+  if (lastKey >= 0) {
+    display.print(lastKey);
+    display.print(lastOn ? " ON" : " OFF");
+  } else {
+    display.println("--");
+  }
+
+  display.display();
+}
+
 // ============================================================
 // ------------------------- Setup -----------------------------
 // ============================================================
@@ -113,9 +199,29 @@ void setup() {
   Serial.begin(115200);
   while (!Serial && millis() < 2000) { }
 
+  // ---- DROP HERE (optional): MIDI safety first ----
+  // This is safe even before the MCPs are initialized.
+  midiPanicOnBoot();
+
   // Initialize I2C bus (Teensy 4.0 defaults are fine)
   Wire.begin();
   // Wire.setClock(100000);   // Uncomment if bus stability is marginal
+
+// ---------- OLED init ----------
+if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3C)) {
+  Serial.println("SSD1306 init failed");
+  while (1) delay(10);
+}
+
+display.clearDisplay();
+display.setTextSize(1);
+display.setTextColor(SSD1306_WHITE);
+display.setCursor(0, 0);
+display.println("Organ Encoder");
+display.println("Boot OK");
+display.println();
+display.println("MCPs: 0x20 21 22");
+display.display();
 
   // Initialize each MCP23017
   for (uint8_t c = 0; c < N_MCP; ++c) {
@@ -146,6 +252,9 @@ void setup() {
 
   // Prime the GPIO cache so first scan is valid
   readAllGPIO();
+
+  // ---- DROP HERE: power-up test that prints once and then stops ----
+  powerUpSelfTest();
 }
 
 // ============================================================
@@ -157,7 +266,7 @@ void loop() {
   // Read all MCP GPIOs once per scan
   readAllGPIO();
 
-  debugBadBits();
+  // debugBadBits(); //turns on expander debugging
 
   // Scan each logical key
   for (uint8_t i = 0; i < N_KEYS; ++i) {
@@ -190,15 +299,23 @@ void loop() {
 
         // Only emit MIDI if this differs from last reported state
         if (stableState[i] != lastReported[i]) {
-          uint8_t note = noteOf(i);
+  uint8_t note = noteOf(i);
 
-          if (stableState[i] == 0)
-            sendNoteOn(note, i);    // pressed
-          else
-            sendNoteOff(note, i);   // released
+  if (stableState[i] == 0) {
+    sendNoteOn(note, i);
+    activeKeys++;
+    lastOn = true;
+  } else {
+    sendNoteOff(note, i);
+    if (activeKeys > 0) activeKeys--;
+    lastOn = false;
+  }
 
-          lastReported[i] = stableState[i];
-        }
+  lastKey = i;
+  oledDirty = true;
+
+  lastReported[i] = stableState[i];
+}
       }
     }
   }
@@ -208,4 +325,6 @@ void loop() {
 
   // Control scan rate
   delay(SCAN_DELAY_MS);
+
+  updateOLED();
 }
