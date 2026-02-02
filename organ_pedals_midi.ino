@@ -24,7 +24,7 @@ static const uint8_t SCAN_DELAY_MS = 1;
 
 // MIDI parameters
 static const uint8_t MIDI_CHANNEL = 1;    // 1..16
-static const uint8_t BASE_NOTE    = 36;   // C2 = 36 (used for temporary Note testing)
+static const uint8_t BASE_CC = 20;   // CC numbers 20..67 (48 controls)
 
 // I2C addresses of the MCP23017 expanders
 static const uint8_t MCP_ADDR[N_MCP] = {0x20, 0x21, 0x22};
@@ -59,8 +59,10 @@ uint16_t gpioCache[N_MCP];
 // Per-key lockout timer (prevents double-triggering after an edge)
 uint32_t lockoutUntil[N_KEYS];
 
-// Convert key index → MIDI note number
-inline uint8_t noteOf(uint8_t i) { return BASE_NOTE + i; }
+// Convert key index → Continuous Controller number
+inline uint8_t ccOf(uint8_t i) {
+  return BASE_CC + i;
+}
 
 // ============================================================
 // -------------------- Power-up Sequences --------------------
@@ -128,18 +130,53 @@ uint8_t readKey(uint8_t i) {
 // -------------------- MIDI Output ----------------------------
 // ============================================================
 
-void sendNoteOn(uint8_t note, uint8_t key) {
-  usbMIDI.sendNoteOn(note, 127, MIDI_CHANNEL);
+void sendCCPress(uint8_t cc, uint8_t key) {
+  usbMIDI.sendControlChange(cc, 127, MIDI_CHANNEL);
+#if DEBUG
   Serial.print("Key ");
   Serial.print(key);
-  Serial.println(" ON");
+  Serial.print(" CC ");
+  Serial.print(cc);
+  Serial.println(" =127");
+#endif
 }
 
-void sendNoteOff(uint8_t note, uint8_t key) {
-  usbMIDI.sendNoteOff(note, 0, MIDI_CHANNEL);
+void sendCCRelease(uint8_t cc, uint8_t key) {
+  usbMIDI.sendControlChange(cc, 0, MIDI_CHANNEL);
+#if DEBUG
   Serial.print("Key ");
   Serial.print(key);
-  Serial.println(" OFF");
+  Serial.print(" CC ");
+  Serial.print(cc);
+  Serial.println(" =0");
+#endif
+}
+void showCCEvent(uint8_t cc, uint8_t value, uint8_t keyIndex) {
+  // Example of what to show:
+  // "K12 CC=35  ON 127"
+  // "K12 CC=35 OFF 0"
+
+  display.clearDisplay();
+  display.setCursor(0, 0);
+  display.print("K"); display.print(keyIndex);
+  display.print(" CC="); display.print(cc);
+  display.print(" ");
+
+  display.print(value ? "ON " : "OFF ");
+  display.print(value);
+
+  display.display();
+}
+
+void panicOnBoot() {
+  // Release all per-key CCs
+  for (uint8_t i = 0; i < N_KEYS; i++) {
+    usbMIDI.sendControlChange(ccOf(i), 0, MIDI_CHANNEL);
+  }
+
+  // Standard MIDI panic messages (harmless, but polite)
+  usbMIDI.sendControlChange(123, 0, MIDI_CHANNEL); // All Notes Off
+  usbMIDI.sendControlChange(120, 0, MIDI_CHANNEL); // All Sound Off
 }
 
 void debugBadBits() {
@@ -187,8 +224,20 @@ void updateOLED() {
   } else {
     display.println("--");
   }
-
   display.display();
+}
+void sendCC(uint8_t cc, uint8_t value, uint8_t keyIndex) {
+  usbMIDI.sendControlChange(cc, value, MIDI_CHANNEL);
+
+  // update status data for updateOLED()
+  lastKey = keyIndex;
+  lastOn  = (value != 0);
+
+  // track active keys count (optional but nice)
+  if (value != 0) activeKeys++;
+  else if (activeKeys > 0) activeKeys--;
+
+  oledDirty = true;   // tell updateOLED() to redraw soon
 }
 
 // ============================================================
@@ -255,6 +304,8 @@ display.display();
 
   // ---- DROP HERE: power-up test that prints once and then stops ----
   powerUpSelfTest();
+
+  panicOnBoot();
 }
 
 // ============================================================
@@ -299,20 +350,13 @@ void loop() {
 
         // Only emit MIDI if this differs from last reported state
         if (stableState[i] != lastReported[i]) {
-  uint8_t note = noteOf(i);
+uint8_t cc = ccOf(i);
 
-  if (stableState[i] == 0) {
-    sendNoteOn(note, i);
-    activeKeys++;
-    lastOn = true;
-  } else {
-    sendNoteOff(note, i);
-    if (activeKeys > 0) activeKeys--;
-    lastOn = false;
-  }
-
-  lastKey = i;
-  oledDirty = true;
+if (stableState[i] == 0)
+  
+    sendCC(cc, 127, i);   // pressed
+  else
+    sendCC(cc, 0, i);     // released
 
   lastReported[i] = stableState[i];
 }
