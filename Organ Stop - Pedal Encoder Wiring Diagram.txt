@@ -1,0 +1,41 @@
+Wiring Overview
+
+I²C Bus (shared)
+
+All devices share the same I²C bus:
+	•	SDA → Teensy SDA (pin 18 on Teensy 4.x)
+	•	SCL → Teensy SCL (pin 19 on Teensy 4.x)
+	•	VCC → 3.3 V
+	•	GND → Common ground
+
+MCP23017 Expanders (×3)
+
+MCP
+Address
+Inputs
+MCP #1
+0x20
+Keys 0–15
+MCP #2
+0x21
+Keys 16–31
+MCP #3
+0x22
+Keys 32–47
+
+Each MCP23017:
+	•	All 16 GPIO pins configured as INPUT_PULLUP
+	•	Each switch connects between GPIO pin and GND
+	•	No external pull-ups required
+
+OLED Display
+	•	Controller: SSD1306
+	•	Resolution: 128×64
+	•	Address: 0x3C
+	•	Connected to same SDA/SCL lines as MCPs
+
+USB
+	•	Teensy USB configured as USB MIDI
+	•	Single USB cable provides:
+	•	power
+	•	MIDI communication
