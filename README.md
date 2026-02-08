@@ -104,9 +104,10 @@ The core concept — detecting multiple grounded inputs via I²C expanders and c
 
 ⸻
 
-License
+## License
 
-(To be added — MIT License recommended.)
+This project is released under the MIT License.  
+See the LICENSE file in this repository for details.
 
 ⸻
 
