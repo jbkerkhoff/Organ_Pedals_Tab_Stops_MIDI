@@ -77,7 +77,7 @@ This encoder is part of a larger Virtual Pipe Organ project.
 Project overview and build documentation:
 
 Roy Creek Ranch (project narrative):
-[https://roycreekranch.com](https://roycreekranch.com/2026/02/05/building-a-great-virtual-pipe-organ-midi-encoders-for-pedals-and-stops/
+[https://roycreekranch.com](https://roycreekranch.com/2026/02/05/building-a-great-virtual-pipe-organ-midi-encoders-for-pedals-and-stops/)
 
 Technical design details:
 [https://jimkerkhoff.com](https://jimkerkhoff.com/2026/02/04/designing-a-multi-input-midi-encoder-for-multiple-switch-closures/)
